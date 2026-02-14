@@ -3,6 +3,7 @@ import os
 import sqlite3
 import requests
 import time
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
@@ -168,6 +169,10 @@ class AddProduct(StatesGroup):
     photo = State()
     file = State()
 
+# Состояние для добавления категории
+class AddCategory(StatesGroup):
+    name = State()
+
 # ================== ОСНОВНЫЕ ОБРАБОТЧИКИ ==================
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
@@ -197,24 +202,25 @@ async def start(message: types.Message):
                     "📦 Здесь вы можете приобрести нужный софт.\n"
                     "💬 Если у вас есть вопросы, пишите в поддержку.\n"
                     "👇 Выберите действие:",
-            reply_markup=get_main_menu_keyboard()
+            reply_markup=get_main_menu_keyboard(user_id)
         )
 
-def get_main_menu_keyboard():
+def get_main_menu_keyboard(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.row(
         InlineKeyboardButton("📁 Софты", callback_data="categories_page_1"),
         InlineKeyboardButton("📢 Канал", url="https://t.me/+UbVydJzc_7dhZGUy")
     )
     keyboard.row(InlineKeyboardButton("💬 Поддержка", callback_data="support"))
-    if is_admin(message.from_user.id):  # здесь нужно будет передавать user_id, поэтому callback_data будет обрабатываться отдельно
+    if is_admin(user_id):
         keyboard.row(InlineKeyboardButton("⚙️ Админ панель", callback_data="admin_panel"))
     return keyboard
 
 # ================== КАТЕГОРИИ И ТОВАРЫ ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('categories_page_'))
 async def show_categories(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -259,7 +265,8 @@ async def show_categories(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('category_'))
 async def show_products(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -302,7 +309,8 @@ async def show_products(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('product_'))
 async def show_product_details(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -354,7 +362,8 @@ def get_product_buy_keyboard(prod_id, cat_id):
 # ================== ПОКУПКА ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('buy_'))
 async def buy_product(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -392,7 +401,8 @@ def get_payment_keyboard(prod_id):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('pay_'))
 async def process_payment(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -416,7 +426,7 @@ async def process_payment(callback_query: types.CallbackQuery):
         cursor.execute('''
             INSERT INTO payments (user_id, product_id, invoice_id, currency, amount, status)
             VALUES (?, ?, ?, ?, ?, 'pending')
-        ''', (callback_query.from_user.id, prod_id, invoice_id, currency, amount))
+        ''', (user_id, prod_id, invoice_id, currency, amount))
         conn.commit()
 
         await bot.answer_callback_query(callback_query.id)
@@ -426,7 +436,7 @@ async def process_payment(callback_query: types.CallbackQuery):
             f"После оплаты товар будет отправлен автоматически."
         )
         # Запускаем проверку оплаты в фоне
-        await check_payment_loop(callback_query.from_user.id, invoice_id, prod_id)
+        asyncio.create_task(check_payment_loop(user_id, invoice_id, prod_id))
     else:
         await bot.answer_callback_query(callback_query.id, "❌ Ошибка при создании счета")
 
@@ -461,7 +471,8 @@ async def check_payment_loop(user_id, invoice_id, prod_id):
 # ================== ПОДДЕРЖКА ==================
 @dp.callback_query_handler(lambda c: c.data == 'support')
 async def support_callback(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
@@ -473,11 +484,11 @@ async def support_callback(callback_query: types.CallbackQuery):
 
 @dp.message_handler(content_types=['text', 'photo', 'video', 'document'])
 async def handle_support_message(message: types.Message):
-    if is_blocked(message.from_user.id):
+    user_id = message.from_user.id
+    if is_blocked(user_id):
         await message.reply("⛔ Вы заблокированы.")
         return
 
-    user_id = message.from_user.id
     first_name = message.from_user.first_name or "отсутствует"
     last_name = message.from_user.last_name or "отсутствует"
     username = message.from_user.username or "отсутствует"
@@ -510,16 +521,19 @@ async def handle_support_message(message: types.Message):
 # ================== АДМИН ПАНЕЛЬ ==================
 @dp.callback_query_handler(lambda c: c.data == 'back_to_main')
 async def back_to_main(callback_query: types.CallbackQuery):
-    if is_blocked(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
     await bot.answer_callback_query(callback_query.id)
-    await start(callback_query.message)  # переиспользуем команду start
+    # Переиспользуем команду start, передавая message
+    await start(callback_query.message)
 
 @dp.callback_query_handler(lambda c: c.data == 'admin_panel')
 async def admin_panel(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ У вас нет прав администратора.")
         return
 
@@ -541,7 +555,8 @@ async def admin_panel(callback_query: types.CallbackQuery):
 # ================== УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_users_page_'))
 async def admin_users_list(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -586,7 +601,8 @@ async def admin_users_list(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_toggle_block_'))
 async def toggle_block_user(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -603,12 +619,15 @@ async def toggle_block_user(callback_query: types.CallbackQuery):
         await bot.answer_callback_query(callback_query.id, "❌ Пользователь не найден.")
 
     # Возвращаемся к списку пользователей
+    # Меняем callback_query.data на нужную страницу и вызываем обработчик
+    callback_query.data = f"admin_users_page_{page}"
     await admin_users_list(callback_query)
 
 # ================== УПРАВЛЕНИЕ КАТЕГОРИЯМИ ==================
 @dp.callback_query_handler(lambda c: c.data == 'admin_categories')
 async def admin_categories(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -635,7 +654,8 @@ async def admin_categories(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_del_cat_'))
 async def admin_delete_category(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -647,31 +667,32 @@ async def admin_delete_category(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == 'admin_add_cat')
 async def admin_add_category(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "Введите название новой категории:")
-    # Устанавливаем состояние для ввода названия
-    await AddProduct.category.set()  # переиспользуем состояние, но можно создать отдельное
+    await AddCategory.name.set()
 
-@dp.message_handler(state=AddProduct.category)
+@dp.message_handler(state=AddCategory.name)
 async def process_category_name(message: types.Message, state: FSMContext):
     cat_name = message.text.strip()
     try:
         cursor.execute('INSERT INTO categories (name) VALUES (?)', (cat_name,))
         conn.commit()
         await message.reply(f"✅ Категория '{cat_name}' создана.")
-        await state.finish()
     except sqlite3.IntegrityError:
         await message.reply("❌ Категория с таким именем уже существует.")
+    finally:
         await state.finish()
 
 # ================== ДОБАВЛЕНИЕ ТОВАРА ==================
 @dp.callback_query_handler(lambda c: c.data == 'admin_add_product')
 async def admin_add_product_start(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -696,6 +717,11 @@ async def admin_add_product_start(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_add_prod_cat_'))
 async def admin_add_product_category(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
+        await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
+        return
+
     cat_id = int(callback_query.data.split('_')[-1])
     await state.update_data(category_id=cat_id)
     await bot.answer_callback_query(callback_query.id)
@@ -850,7 +876,8 @@ async def add_product_file(message: types.Message, state: FSMContext):
 # ================== СПИСОК ТОВАРОВ ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_products_page_'))
 async def admin_products_list(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -900,7 +927,8 @@ async def admin_products_list(callback_query: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_del_prod_'))
 async def admin_delete_product(callback_query: types.CallbackQuery):
-    if not is_admin(callback_query.from_user.id):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
         await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
         return
 
@@ -918,10 +946,11 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
     conn.commit()
     await bot.answer_callback_query(callback_query.id, "✅ Товар удалён.")
     # Возвращаемся к списку товаров на той же странице
+    # Извлекаем текущую страницу из callback_query.data (она может отсутствовать)
+    # Просто вызываем admin_products_list с page=1
+    callback_query.data = "admin_products_page_1"
     await admin_products_list(callback_query)
 
 # ================== ЗАПУСК ==================
 if __name__ == '__main__':
-    # Добавляем asyncio для цикла проверки оплаты
-    import asyncio
     executor.start_polling(dp, skip_updates=True)
