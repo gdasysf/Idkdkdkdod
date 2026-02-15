@@ -15,15 +15,13 @@ TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'
 CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'
 ADMIN_IDS = [5459547413]
 
-# Пути к изображениям (обязательно положите файлы в папку с ботом)
 WELCOME_IMAGE = 'welcome.png'
 BUY_IMAGE = 'buy.png'
 
-# Папка для хранения файлов товаров
 FILES_DIR = 'product_files'
 os.makedirs(FILES_DIR, exist_ok=True)
 
-# ================== ИНИЦИАЛИЗАЦИЯ БД ==================
+# ================== БД ==================
 conn = sqlite3.connect('shop.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -64,7 +62,7 @@ CREATE TABLE IF NOT EXISTS products (
     price_doge REAL,
     price_trx REAL,
     price_not REAL,
-    file_path TEXT,                # путь к файлу товара
+    file_path TEXT,
     FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
 )
 ''')
@@ -86,7 +84,7 @@ CREATE TABLE IF NOT EXISTS payments (
 ''')
 conn.commit()
 
-# ================== ИНИЦИАЛИЗАЦИЯ БОТА ==================
+# ================== БОТ ==================
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
@@ -118,7 +116,6 @@ def is_admin(user_id):
     return user and user[5] == 1
 
 def create_invoice(asset, amount, description):
-    """Создание счета в Crypto Bot"""
     url = f"{CRYPTO_API_URL}/createInvoice"
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN,
@@ -128,7 +125,7 @@ def create_invoice(asset, amount, description):
         "asset": asset,
         "amount": str(amount),
         "description": description,
-        "payload": "custom_payload"  # можно использовать для идентификации
+        "payload": "custom_payload"
     }
     try:
         response = requests.post(url, headers=headers, json=data, timeout=10)
@@ -142,7 +139,6 @@ def create_invoice(asset, amount, description):
         return None
 
 def check_invoice_status(invoice_id):
-    """Проверка статуса счета"""
     url = f"{CRYPTO_API_URL}/getInvoices"
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN,
@@ -160,7 +156,7 @@ def check_invoice_status(invoice_id):
         logging.error(f"Исключение при проверке статуса: {e}")
         return None
 
-# ================== СОСТОЯНИЯ FSM ==================
+# ================== FSM ==================
 class AddCategory(StatesGroup):
     name = State()
 
@@ -184,7 +180,7 @@ def main_menu_keyboard(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.row(
         InlineKeyboardButton("📁 Категории", callback_data="categories_page_1"),
-        InlineKeyboardButton("📢 Канал", url="https://t.me/your_channel")  # замените на свой канал
+        InlineKeyboardButton("📢 Канал", url="https://t.me/your_channel")
     )
     keyboard.row(InlineKeyboardButton("💬 Поддержка", callback_data="support"))
     if is_admin(user_id):
@@ -202,7 +198,6 @@ async def start(message: types.Message):
         await message.reply("⛔ Вы заблокированы и не можете пользоваться ботом.")
         return
 
-    # Сохраняем пользователя
     add_user(
         user_id,
         message.from_user.username,
@@ -210,7 +205,6 @@ async def start(message: types.Message):
         message.from_user.last_name
     )
 
-    # Приветствие
     first_name = message.from_user.first_name or "пользователь"
     welcome_text = (f"👋 Добро пожаловать, {first_name}!\n"
                     f"Создатель этого бота: @ponevsky\n"
@@ -346,7 +340,6 @@ async def show_product_details(callback_query: types.CallbackQuery):
         return
 
     name, desc, *prices, cat_id = prod
-    # Формируем описание с ценами
     currency_names = ['TON', 'BTC', 'ETH', 'USDT', 'BNB', 'LTC', 'DOGE', 'TRX', 'NOT']
     price_text = ""
     for i, curr in enumerate(currency_names):
@@ -355,7 +348,6 @@ async def show_product_details(callback_query: types.CallbackQuery):
 
     caption = f"<b>{name}</b>\n\n{desc}\n\nЦены:\n{price_text}"
 
-    # Отправляем изображение buy.png, если есть, вместе с информацией о товаре
     if os.path.exists(BUY_IMAGE):
         with open(BUY_IMAGE, 'rb') as photo:
             await bot.send_photo(
@@ -428,7 +420,6 @@ async def process_payment(callback_query: types.CallbackQuery):
     _, prod_id, currency = callback_query.data.split('_')
     prod_id = int(prod_id)
 
-    # Получаем цену для выбранной валюты
     cursor.execute(f'SELECT price_{currency.lower()}, name FROM products WHERE id = ?', (prod_id,))
     result = cursor.fetchone()
     if not result or not result[0]:
@@ -441,7 +432,6 @@ async def process_payment(callback_query: types.CallbackQuery):
         pay_url = invoice['result']['pay_url']
         invoice_id = invoice['result']['invoice_id']
 
-        # Сохраняем платёж в БД
         cursor.execute('''
             INSERT INTO payments (user_id, product_id, invoice_id, currency, amount, status)
             VALUES (?, ?, ?, ?, ?, 'pending')
@@ -454,7 +444,6 @@ async def process_payment(callback_query: types.CallbackQuery):
             f"💳 Ссылка для оплаты: {pay_url}\n\n"
             f"После оплаты товар будет отправлен автоматически."
         )
-        # Запускаем проверку оплаты в фоне
         asyncio.create_task(check_payment_loop(user_id, invoice_id, prod_id))
     else:
         await bot.answer_callback_query(callback_query.id, "❌ Ошибка при создании счета")
@@ -466,14 +455,12 @@ async def check_payment_loop(user_id, invoice_id, prod_id):
         if invoice_status and 'result' in invoice_status:
             items = invoice_status['result'].get('items', [])
             if items and items[0]['status'] == 'paid':
-                # Обновляем статус платежа
                 cursor.execute('''
                     UPDATE payments SET status = 'paid', paid_at = CURRENT_TIMESTAMP
                     WHERE invoice_id = ?
                 ''', (invoice_id,))
                 conn.commit()
 
-                # Отправляем товар
                 cursor.execute('SELECT file_path, name FROM products WHERE id = ?', (prod_id,))
                 file_path, prod_name = cursor.fetchone()
                 if os.path.exists(file_path):
@@ -526,7 +513,6 @@ async def handle_support_message(message: types.Message):
     elif message.document:
         admin_message += "📄 Файл сообщения:"
 
-    # Отправляем всем админам
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, admin_message)
@@ -626,7 +612,6 @@ async def toggle_block_user(callback_query: types.CallbackQuery):
     else:
         await bot.answer_callback_query(callback_query.id, "❌ Пользователь не найден.")
 
-    # Возвращаемся к списку пользователей
     callback_query.data = f"admin_users_page_{page}"
     await admin_users_list(callback_query)
 
@@ -667,7 +652,6 @@ async def admin_delete_category(callback_query: types.CallbackQuery):
         return
 
     cat_id = int(callback_query.data.split('_')[-1])
-    # Сначала удаляем все товары в категории (и их файлы)
     cursor.execute('SELECT file_path FROM products WHERE category_id = ?', (cat_id,))
     for row in cursor.fetchall():
         file_path = row[0]
@@ -848,12 +832,10 @@ async def add_product_file(message: types.Message, state: FSMContext):
     file_id = document.file_id
     file = await bot.get_file(file_id)
     file_path = file.file_path
-    # Сохраняем с оригинальным именем
     dest = os.path.join(FILES_DIR, document.file_name)
     await bot.download_file(file_path, dest)
     data = await state.get_data()
 
-    # Вставляем товар в БД
     cursor.execute('''
         INSERT INTO products (
             category_id, name, description,
@@ -931,7 +913,6 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
         return
 
     prod_id = int(callback_query.data.split('_')[-1])
-    # Получаем путь к файлу для удаления
     cursor.execute('SELECT file_path FROM products WHERE id = ?', (prod_id,))
     res = cursor.fetchone()
     if res:
@@ -941,7 +922,6 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
     cursor.execute('DELETE FROM products WHERE id = ?', (prod_id,))
     conn.commit()
     await bot.answer_callback_query(callback_query.id, "✅ Товар удалён.")
-    # Возвращаемся к списку товаров на первой странице
     callback_query.data = "admin_products_page_1"
     await admin_products_list(callback_query)
 
