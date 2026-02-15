@@ -11,9 +11,9 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 # ================== НАСТРОЙКИ ==================
-TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'          # замените на свой токен
-CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'              # токен от @CryptoBot (например, 12345:ABC...)
-ADMIN_IDS = [5459547413]                                  # список ID администраторов
+TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'
+CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'
+ADMIN_IDS = [5459547413]
 
 # Пути к изображениям (обязательно положите файлы в папку с ботом)
 WELCOME_IMAGE = 'welcome.png'
