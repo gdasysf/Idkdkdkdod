@@ -11,9 +11,9 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 # ================== НАСТРОЙКИ ==================
-TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'
-CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'
-ADMIN_IDS = [5459547413]
+TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'   # замените на свой токен
+CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'       # токен от @CryptoBot
+ADMIN_IDS = [5459547413]                           # ID администраторов
 
 WELCOME_IMAGE = 'welcome.png'
 BUY_IMAGE = 'buy.png'
@@ -25,7 +25,6 @@ os.makedirs(FILES_DIR, exist_ok=True)
 conn = sqlite3.connect('shop.db', check_same_thread=False)
 cursor = conn.cursor()
 
-# Таблица пользователей
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
@@ -38,7 +37,6 @@ CREATE TABLE IF NOT EXISTS users (
 )
 ''')
 
-# Таблица категорий
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +44,6 @@ CREATE TABLE IF NOT EXISTS categories (
 )
 ''')
 
-# Таблица товаров
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +64,6 @@ CREATE TABLE IF NOT EXISTS products (
 )
 ''')
 
-# Таблица платежей
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -853,7 +849,7 @@ async def add_product_file(message: types.Message, state: FSMContext):
     await message.reply("✅ Товар успешно добавлен!")
     await state.finish()
 
-# ================== СПИСОК ТОВАРОВ (АДМИНКА) ==================
+# ================== СПИСОК ТОВАРОВ (АДМИНКА) С ТЕСТОВОЙ ВЫДАЧЕЙ ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_products_page_'))
 async def admin_products_list(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -881,13 +877,17 @@ async def admin_products_list(callback_query: types.CallbackQuery):
     page_prods = products[start:end]
 
     text = f"📦 Список товаров (страница {page}/{total_pages}):\n\n"
-    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard = InlineKeyboardMarkup(row_width=2)  # меняем на 2, чтобы кнопки были рядом
     for pid, pname, cat_id in page_prods:
         cursor.execute('SELECT name FROM categories WHERE id = ?', (cat_id,))
         cat_name = cursor.fetchone()
         cat_name = cat_name[0] if cat_name else "Без категории"
         text += f"ID {pid}: {pname} (категория: {cat_name})\n"
-        keyboard.add(InlineKeyboardButton(f"❌ Удалить {pname}", callback_data=f"admin_del_prod_{pid}"))
+        # Добавляем две кнопки: удалить и тест
+        keyboard.add(
+            InlineKeyboardButton(f"❌ Удалить", callback_data=f"admin_del_prod_{pid}"),
+            InlineKeyboardButton(f"📤 Тест", callback_data=f"admin_test_prod_{pid}")
+        )
 
     nav_buttons = []
     if page > 1:
@@ -895,6 +895,8 @@ async def admin_products_list(callback_query: types.CallbackQuery):
     if page < total_pages:
         nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"admin_products_page_{page+1}"))
     if nav_buttons:
+        # Если есть навигация, добавляем её в отдельную строку (row_width игнорируется, но можно через row)
+        # Используем row, чтобы кнопки навигации были в одной строке
         keyboard.row(*nav_buttons)
     keyboard.row(InlineKeyboardButton("⬅️ Назад в админку", callback_data="admin_panel"))
 
@@ -905,6 +907,34 @@ async def admin_products_list(callback_query: types.CallbackQuery):
         reply_markup=keyboard
     )
 
+# ================== ТЕСТОВАЯ ВЫДАЧА ТОВАРА ДЛЯ АДМИНА ==================
+@dp.callback_query_handler(lambda c: c.data.startswith('admin_test_prod_'))
+async def admin_test_product(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if not is_admin(user_id):
+        await bot.answer_callback_query(callback_query.id, "⛔ Нет прав.")
+        return
+
+    prod_id = int(callback_query.data.split('_')[-1])
+    cursor.execute('SELECT file_path, name FROM products WHERE id = ?', (prod_id,))
+    res = cursor.fetchone()
+    if not res:
+        await bot.answer_callback_query(callback_query.id, "❌ Товар не найден.")
+        return
+    file_path, prod_name = res
+
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as f:
+            await bot.send_document(
+                user_id,
+                f,
+                caption=f"🧪 Тестовая выдача товара:\n\n{prod_name}"
+            )
+        await bot.answer_callback_query(callback_query.id, "✅ Тестовый файл отправлен.")
+    else:
+        await bot.answer_callback_query(callback_query.id, "❌ Файл товара не найден.")
+
+# ================== УДАЛЕНИЕ ТОВАРА (АДМИНКА) ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_del_prod_'))
 async def admin_delete_product(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -922,6 +952,7 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
     cursor.execute('DELETE FROM products WHERE id = ?', (prod_id,))
     conn.commit()
     await bot.answer_callback_query(callback_query.id, "✅ Товар удалён.")
+    # Возвращаемся к списку товаров на первой странице
     callback_query.data = "admin_products_page_1"
     await admin_products_list(callback_query)
 
