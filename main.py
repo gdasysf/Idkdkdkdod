@@ -176,7 +176,7 @@ def main_menu_keyboard(user_id):
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.row(
         InlineKeyboardButton("📁 Категории", callback_data="categories_page_1"),
-        InlineKeyboardButton("📢 Канал", url="https://t.me/your_channel")
+        InlineKeyboardButton("📢 Канал", url="https://t.me/nevsky_chanel")  # ← ссылка изменена
     )
     keyboard.row(InlineKeyboardButton("💬 Поддержка", callback_data="support"))
     if is_admin(user_id):
@@ -877,13 +877,12 @@ async def admin_products_list(callback_query: types.CallbackQuery):
     page_prods = products[start:end]
 
     text = f"📦 Список товаров (страница {page}/{total_pages}):\n\n"
-    keyboard = InlineKeyboardMarkup(row_width=2)  # меняем на 2, чтобы кнопки были рядом
+    keyboard = InlineKeyboardMarkup(row_width=2)
     for pid, pname, cat_id in page_prods:
         cursor.execute('SELECT name FROM categories WHERE id = ?', (cat_id,))
         cat_name = cursor.fetchone()
         cat_name = cat_name[0] if cat_name else "Без категории"
         text += f"ID {pid}: {pname} (категория: {cat_name})\n"
-        # Добавляем две кнопки: удалить и тест
         keyboard.add(
             InlineKeyboardButton(f"❌ Удалить", callback_data=f"admin_del_prod_{pid}"),
             InlineKeyboardButton(f"📤 Тест", callback_data=f"admin_test_prod_{pid}")
@@ -895,8 +894,6 @@ async def admin_products_list(callback_query: types.CallbackQuery):
     if page < total_pages:
         nav_buttons.append(InlineKeyboardButton("Вперёд ➡️", callback_data=f"admin_products_page_{page+1}"))
     if nav_buttons:
-        # Если есть навигация, добавляем её в отдельную строку (row_width игнорируется, но можно через row)
-        # Используем row, чтобы кнопки навигации были в одной строке
         keyboard.row(*nav_buttons)
     keyboard.row(InlineKeyboardButton("⬅️ Назад в админку", callback_data="admin_panel"))
 
@@ -952,7 +949,6 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
     cursor.execute('DELETE FROM products WHERE id = ?', (prod_id,))
     conn.commit()
     await bot.answer_callback_query(callback_query.id, "✅ Товар удалён.")
-    # Возвращаемся к списку товаров на первой странице
     callback_query.data = "admin_products_page_1"
     await admin_products_list(callback_query)
 
