@@ -2,7 +2,6 @@ import logging
 import os
 import sqlite3
 import requests
-import time
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -12,17 +11,19 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 # ================== НАСТРОЙКИ ==================
-TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'  # замените на свой
-CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'      # замените на свой
-ADMIN_IDS = [5459547413]  # список ID администраторов (можно несколько)
+TELEGRAM_BOT_TOKEN = '8107230002:AAEWIQiPbgL4lXJ6eeYwrOA3-jFYDQeuV04'          # замените на свой токен
+CRYPTO_BOT_TOKEN = '509179:AAHycIbTUPLk87WcaOiTFob9mvNQ3FmEZT6'              # токен от @CryptoBot (например, 12345:ABC...)
+ADMIN_IDS = [5459547413]                                  # список ID администраторов
 
-# Пути для хранения файлов
-PHOTOS_DIR = 'product_photos'
+# Пути к изображениям (обязательно положите файлы в папку с ботом)
+WELCOME_IMAGE = 'welcome.png'
+BUY_IMAGE = 'buy.png'
+
+# Папка для хранения файлов товаров
 FILES_DIR = 'product_files'
-os.makedirs(PHOTOS_DIR, exist_ok=True)
 os.makedirs(FILES_DIR, exist_ok=True)
 
-# ================== БД ИНИЦИАЛИЗАЦИЯ ==================
+# ================== ИНИЦИАЛИЗАЦИЯ БД ==================
 conn = sqlite3.connect('shop.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -43,8 +44,7 @@ CREATE TABLE IF NOT EXISTS users (
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    description TEXT
+    name TEXT UNIQUE
 )
 ''')
 
@@ -64,8 +64,7 @@ CREATE TABLE IF NOT EXISTS products (
     price_doge REAL,
     price_trx REAL,
     price_not REAL,
-    photo_path TEXT,
-    file_path TEXT,
+    file_path TEXT,                # путь к файлу товара
     FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
 )
 ''')
@@ -89,7 +88,7 @@ conn.commit()
 
 # ================== ИНИЦИАЛИЗАЦИЯ БОТА ==================
 storage = MemoryStorage()
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(token=TELEGRAM_BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
 
 logging.basicConfig(level=logging.INFO)
@@ -110,16 +109,16 @@ def add_user(user_id, username, first_name, last_name):
 
 def is_blocked(user_id):
     user = get_user(user_id)
-    return user and user[4] == 1  # is_blocked
+    return user and user[4] == 1
 
 def is_admin(user_id):
-    # проверка по списку ADMIN_IDS или по флагу в БД
     if user_id in ADMIN_IDS:
         return True
     user = get_user(user_id)
     return user and user[5] == 1
 
 def create_invoice(asset, amount, description):
+    """Создание счета в Crypto Bot"""
     url = f"{CRYPTO_API_URL}/createInvoice"
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN,
@@ -129,30 +128,42 @@ def create_invoice(asset, amount, description):
         "asset": asset,
         "amount": str(amount),
         "description": description,
-        "payload": "custom_payload"
+        "payload": "custom_payload"  # можно использовать для идентификации
     }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        logging.error(f"Ошибка при создании счета: {response.status_code} - {response.text}")
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logging.error(f"Ошибка создания счета: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Исключение при создании счета: {e}")
         return None
 
 def check_invoice_status(invoice_id):
+    """Проверка статуса счета"""
     url = f"{CRYPTO_API_URL}/getInvoices"
     headers = {
         "Crypto-Pay-API-Token": CRYPTO_BOT_TOKEN,
         "Content-Type": "application/json"
     }
     params = {"invoice_ids": invoice_id}
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        logging.error(f"Ошибка при проверке статуса: {response.status_code} - {response.text}")
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logging.error(f"Ошибка проверки статуса: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Исключение при проверке статуса: {e}")
         return None
 
-# ================== СОСТОЯНИЯ ДЛЯ ДОБАВЛЕНИЯ ТОВАРА ==================
+# ================== СОСТОЯНИЯ FSM ==================
+class AddCategory(StatesGroup):
+    name = State()
+
 class AddProduct(StatesGroup):
     category = State()
     name = State()
@@ -166,14 +177,24 @@ class AddProduct(StatesGroup):
     price_doge = State()
     price_trx = State()
     price_not = State()
-    photo = State()
     file = State()
 
-# Состояние для добавления категории
-class AddCategory(StatesGroup):
-    name = State()
+# ================== КЛАВИАТУРЫ ==================
+def main_menu_keyboard(user_id):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.row(
+        InlineKeyboardButton("📁 Категории", callback_data="categories_page_1"),
+        InlineKeyboardButton("📢 Канал", url="https://t.me/your_channel")  # замените на свой канал
+    )
+    keyboard.row(InlineKeyboardButton("💬 Поддержка", callback_data="support"))
+    if is_admin(user_id):
+        keyboard.row(InlineKeyboardButton("⚙️ Админ панель", callback_data="admin_panel"))
+    return keyboard
 
-# ================== ОСНОВНЫЕ ОБРАБОТЧИКИ ==================
+def back_to_main_button():
+    return InlineKeyboardMarkup().add(InlineKeyboardButton("⬅️ На главную", callback_data="back_to_main"))
+
+# ================== ОБРАБОТЧИКИ ==================
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
     user_id = message.from_user.id
@@ -189,34 +210,34 @@ async def start(message: types.Message):
         message.from_user.last_name
     )
 
-    welcome_photo_path = "welcome.jpg"
-    if not os.path.exists(welcome_photo_path):
-        await message.reply("❌ Фото для приветствия не найдено.")
+    # Приветствие
+    first_name = message.from_user.first_name or "пользователь"
+    welcome_text = (f"👋 Добро пожаловать, {first_name}!\n"
+                    f"Создатель этого бота: @ponevsky\n"
+                    f"Приятного времяпрепровождения в Nevsky Shop!")
+
+    if os.path.exists(WELCOME_IMAGE):
+        with open(WELCOME_IMAGE, 'rb') as photo:
+            await bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=welcome_text,
+                reply_markup=main_menu_keyboard(user_id)
+            )
+    else:
+        await message.answer(welcome_text, reply_markup=main_menu_keyboard(user_id))
+
+@dp.callback_query_handler(lambda c: c.data == 'back_to_main')
+async def back_to_main(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    if is_blocked(user_id):
+        await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
         return
 
-    with open(welcome_photo_path, 'rb') as photo:
-        await bot.send_photo(
-            message.chat.id,
-            photo,
-            caption="👋 Привет! Добро пожаловать в наш магазин софтов!\n\n"
-                    "📦 Здесь вы можете приобрести нужный софт.\n"
-                    "💬 Если у вас есть вопросы, пишите в поддержку.\n"
-                    "👇 Выберите действие:",
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
+    await bot.answer_callback_query(callback_query.id)
+    await start(callback_query.message)
 
-def get_main_menu_keyboard(user_id):
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.row(
-        InlineKeyboardButton("📁 Софты", callback_data="categories_page_1"),
-        InlineKeyboardButton("📢 Канал", url="https://t.me/+UbVydJzc_7dhZGUy")
-    )
-    keyboard.row(InlineKeyboardButton("💬 Поддержка", callback_data="support"))
-    if is_admin(user_id):
-        keyboard.row(InlineKeyboardButton("⚙️ Админ панель", callback_data="admin_panel"))
-    return keyboard
-
-# ================== КАТЕГОРИИ И ТОВАРЫ ==================
+# ================== КАТЕГОРИИ И ТОВАРЫ (ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ) ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('categories_page_'))
 async def show_categories(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -225,18 +246,17 @@ async def show_categories(callback_query: types.CallbackQuery):
         return
 
     page = int(callback_query.data.split('_')[-1])
-    cursor.execute('SELECT id, name FROM categories')
+    cursor.execute('SELECT id, name FROM categories ORDER BY name')
     categories = cursor.fetchall()
     if not categories:
         await bot.edit_message_text(
             chat_id=callback_query.message.chat.id,
             message_id=callback_query.message.message_id,
             text="📂 Категории пока пусты.",
-            reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("⬅️ На главную", callback_data="back_to_main"))
+            reply_markup=back_to_main_button()
         )
         return
 
-    # Пагинация по 5 категорий
     per_page = 5
     total_pages = (len(categories) + per_page - 1) // per_page
     start = (page - 1) * per_page
@@ -316,7 +336,7 @@ async def show_product_details(callback_query: types.CallbackQuery):
 
     prod_id = int(callback_query.data.split('_')[1])
     cursor.execute('''
-        SELECT name, description, photo_path, price_ton, price_btc, price_eth, price_usdt,
+        SELECT name, description, price_ton, price_btc, price_eth, price_usdt,
                price_bnb, price_ltc, price_doge, price_trx, price_not, category_id
         FROM products WHERE id = ?
     ''', (prod_id,))
@@ -325,30 +345,29 @@ async def show_product_details(callback_query: types.CallbackQuery):
         await bot.answer_callback_query(callback_query.id, "Товар не найден.")
         return
 
-    name, desc, photo_path, *prices, cat_id = prod
-    # формируем описание с ценами
-    price_text = ""
+    name, desc, *prices, cat_id = prod
+    # Формируем описание с ценами
     currency_names = ['TON', 'BTC', 'ETH', 'USDT', 'BNB', 'LTC', 'DOGE', 'TRX', 'NOT']
+    price_text = ""
     for i, curr in enumerate(currency_names):
         if prices[i] and prices[i] > 0:
             price_text += f"{curr}: {prices[i]}\n"
 
     caption = f"<b>{name}</b>\n\n{desc}\n\nЦены:\n{price_text}"
 
-    if os.path.exists(photo_path):
-        with open(photo_path, 'rb') as photo:
+    # Отправляем изображение buy.png, если есть, вместе с информацией о товаре
+    if os.path.exists(BUY_IMAGE):
+        with open(BUY_IMAGE, 'rb') as photo:
             await bot.send_photo(
                 callback_query.from_user.id,
                 photo,
                 caption=caption,
-                parse_mode='HTML',
                 reply_markup=get_product_buy_keyboard(prod_id, cat_id)
             )
     else:
         await bot.send_message(
             callback_query.from_user.id,
             caption,
-            parse_mode='HTML',
             reply_markup=get_product_buy_keyboard(prod_id, cat_id)
         )
     await bot.answer_callback_query(callback_query.id)
@@ -519,17 +538,6 @@ async def handle_support_message(message: types.Message):
     await message.reply("✅ Ваше сообщение отправлено администратору на рассмотрение. Ожидайте ответа.")
 
 # ================== АДМИН ПАНЕЛЬ ==================
-@dp.callback_query_handler(lambda c: c.data == 'back_to_main')
-async def back_to_main(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    if is_blocked(user_id):
-        await bot.answer_callback_query(callback_query.id, "⛔ Вы заблокированы.")
-        return
-
-    await bot.answer_callback_query(callback_query.id)
-    # Переиспользуем команду start, передавая message
-    await start(callback_query.message)
-
 @dp.callback_query_handler(lambda c: c.data == 'admin_panel')
 async def admin_panel(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -619,7 +627,6 @@ async def toggle_block_user(callback_query: types.CallbackQuery):
         await bot.answer_callback_query(callback_query.id, "❌ Пользователь не найден.")
 
     # Возвращаемся к списку пользователей
-    # Меняем callback_query.data на нужную страницу и вызываем обработчик
     callback_query.data = f"admin_users_page_{page}"
     await admin_users_list(callback_query)
 
@@ -660,9 +667,16 @@ async def admin_delete_category(callback_query: types.CallbackQuery):
         return
 
     cat_id = int(callback_query.data.split('_')[-1])
+    # Сначала удаляем все товары в категории (и их файлы)
+    cursor.execute('SELECT file_path FROM products WHERE category_id = ?', (cat_id,))
+    for row in cursor.fetchall():
+        file_path = row[0]
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    cursor.execute('DELETE FROM products WHERE category_id = ?', (cat_id,))
     cursor.execute('DELETE FROM categories WHERE id = ?', (cat_id,))
     conn.commit()
-    await bot.answer_callback_query(callback_query.id, "✅ Категория удалена.")
+    await bot.answer_callback_query(callback_query.id, "✅ Категория и все её товары удалены.")
     await admin_categories(callback_query)
 
 @dp.callback_query_handler(lambda c: c.data == 'admin_add_cat')
@@ -697,14 +711,12 @@ async def admin_add_product_start(callback_query: types.CallbackQuery):
         return
 
     await bot.answer_callback_query(callback_query.id)
-    # Проверим, есть ли категории
     cursor.execute('SELECT id, name FROM categories')
     cats = cursor.fetchall()
     if not cats:
         await bot.send_message(callback_query.from_user.id, "❌ Сначала создайте хотя бы одну категорию.")
         return
 
-    # Отправляем клавиатуру с выбором категории
     keyboard = InlineKeyboardMarkup(row_width=2)
     for cat_id, name in cats:
         keyboard.add(InlineKeyboardButton(name, callback_data=f"admin_add_prod_cat_{cat_id}"))
@@ -825,24 +837,10 @@ async def add_product_price_not(message: types.Message, state: FSMContext):
     try:
         price = float(message.text.strip())
         await state.update_data(price_not=price)
-        await message.reply("Отправьте фото товара (как фото):")
+        await message.reply("Теперь отправьте файл товара (архив, документ и т.п.):")
         await AddProduct.next()
     except ValueError:
         await message.reply("Пожалуйста, введите число.")
-
-@dp.message_handler(content_types=['photo'], state=AddProduct.photo)
-async def add_product_photo(message: types.Message, state: FSMContext):
-    # Сохраняем фото
-    photo = message.photo[-1]
-    file_id = photo.file_id
-    file = await bot.get_file(file_id)
-    file_path = file.file_path
-    # Скачиваем файл
-    dest = os.path.join(PHOTOS_DIR, f"{file_id}.jpg")
-    await bot.download_file(file_path, dest)
-    await state.update_data(photo_path=dest)
-    await message.reply("Теперь отправьте файл товара (архив или документ):")
-    await AddProduct.next()
 
 @dp.message_handler(content_types=['document'], state=AddProduct.file)
 async def add_product_file(message: types.Message, state: FSMContext):
@@ -861,19 +859,19 @@ async def add_product_file(message: types.Message, state: FSMContext):
             category_id, name, description,
             price_ton, price_btc, price_eth, price_usdt,
             price_bnb, price_ltc, price_doge, price_trx, price_not,
-            photo_path, file_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            file_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         data['category_id'], data['name'], data['description'],
         data['price_ton'], data['price_btc'], data['price_eth'], data['price_usdt'],
         data['price_bnb'], data['price_ltc'], data['price_doge'], data['price_trx'], data['price_not'],
-        data['photo_path'], dest
+        dest
     ))
     conn.commit()
     await message.reply("✅ Товар успешно добавлен!")
     await state.finish()
 
-# ================== СПИСОК ТОВАРОВ ==================
+# ================== СПИСОК ТОВАРОВ (АДМИНКА) ==================
 @dp.callback_query_handler(lambda c: c.data.startswith('admin_products_page_'))
 async def admin_products_list(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
@@ -933,21 +931,17 @@ async def admin_delete_product(callback_query: types.CallbackQuery):
         return
 
     prod_id = int(callback_query.data.split('_')[-1])
-    # Получаем пути к файлам для удаления
-    cursor.execute('SELECT photo_path, file_path FROM products WHERE id = ?', (prod_id,))
-    paths = cursor.fetchone()
-    if paths:
-        photo, file = paths
-        if os.path.exists(photo):
-            os.remove(photo)
-        if os.path.exists(file):
-            os.remove(file)
+    # Получаем путь к файлу для удаления
+    cursor.execute('SELECT file_path FROM products WHERE id = ?', (prod_id,))
+    res = cursor.fetchone()
+    if res:
+        file_path = res[0]
+        if os.path.exists(file_path):
+            os.remove(file_path)
     cursor.execute('DELETE FROM products WHERE id = ?', (prod_id,))
     conn.commit()
     await bot.answer_callback_query(callback_query.id, "✅ Товар удалён.")
-    # Возвращаемся к списку товаров на той же странице
-    # Извлекаем текущую страницу из callback_query.data (она может отсутствовать)
-    # Просто вызываем admin_products_list с page=1
+    # Возвращаемся к списку товаров на первой странице
     callback_query.data = "admin_products_page_1"
     await admin_products_list(callback_query)
 
